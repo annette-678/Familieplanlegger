@@ -1,249 +1,595 @@
+import { useState, useEffect, useRef } from "react";
+
+// ─── Firebase config ──────────────────────────────────────────────────────────
+const FIREBASE_CONFIG = {
+  apiKey:            "AIzaSyAKZ3N_RhjX2-bP9KQNKvBpNbJMMqZEu3w",
+  authDomain:        "familieplanlegger-a978d.firebaseapp.com",
+  projectId:         "familieplanlegger-a978d",
+  storageBucket:     "familieplanlegger-a978d.firebasestorage.app",
+  messagingSenderId: "107531873859",
+  appId:             "1:107531873859:web:b8b8645b40840c33abeef6",
+};
+// VAPID-nøkkel fra Firebase Console → Project settings → Cloud Messaging → Web Push certificates
+const VAPID_KEY = "BEtAodCD2hwzuugDFR1gIf5nRbDtG-Q6dMSispGGrrgv5g_WDAA0MGHnPPBuso48j5zma_fVlvSeD9i-i9tQ_aM";
+// ─────────────────────────────────────────────────────────────────────────────
+
+const FAMILY_MEMBERS = [
+  { id: "olemartin", name: "Ole Martin", color: "#5a8ee0", emoji: "👨" },
+  { id: "annette",   name: "Annette",   color: "#e07b5a", emoji: "👩" },
+  { id: "aria",      name: "Aria",      color: "#c45ab3", emoji: "👧" },
+  { id: "falk",      name: "Falk",      color: "#5ac47d", emoji: "🧒" },
+  { id: "felles",      name: "Felles",      color: "#f7f036", emoji: "👨‍👩‍👧‍👦" },	
+];
+
+const CATEGORIES = [
+  { id: "skole",   label: "Skole/jobb", icon: "📚" },
+  { id: "fritid",  label: "Fritid",     icon: "⚽" },
+  { id: "helse",   label: "Helse",      icon: "🏥" },
+  { id: "familie", label: "Familie",    icon: "🏠" },
+  { id: "annet",   label: "Annet",      icon: "📌" },
+];
+
+const REMINDER_OPTIONS = [
+  { value: 10,  label: "10 min før" },
+  { value: 30,  label: "30 min før" },
+  { value: 60,  label: "1 time før" },
+  { value: 120, label: "2 timer før" },
+  { value: 0,   label: "Ingen" },
+];
+
+const DAYS_NO      = ["Man","Tir","Ons","Tor","Fre","Lør","Søn"];
+const MONTHS_NO    = ["Januar","Februar","Mars","April","Mai","Juni","Juli","August","September","Oktober","November","Desember"];
+const MONTHS_SHORT = ["jan","feb","mar","apr","mai","jun","jul","aug","sep","okt","nov","des"];
+
+function dateKey(d) {
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+}
+function addDays(d, n) { const r = new Date(d); r.setDate(r.getDate()+n); return r; }
+function isSameDay(a,b) { return a.getFullYear()===b.getFullYear()&&a.getMonth()===b.getMonth()&&a.getDate()===b.getDate(); }
+function getMonthDays(year, month) {
+  const first = (new Date(year,month,1).getDay()+6)%7;
+  const total = new Date(year,month+1,0).getDate();
+  const days = [];
+  for(let i=0;i<first;i++) days.push(null);
+  for(let d=1;d<=total;d++) days.push(d);
+  return days;
+}
+
+// ─── Firebase ─────────────────────────────────────────────────────────────────
+let db=null, auth=null, messaging=null, currentUser=null, firestoreReady=false;
+let unsubscribe=null;
+
+async function initFirebase(setUser, setEvents, setFbStatus, setNotifStatus) {
+  try {
+    setFbStatus("connecting");
+    await Promise.all([
+      loadScript("https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"),
+      loadScript("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"),
+      loadScript("https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"),
+      loadScript("https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging-compat.js"),
+    ]);
+    if (!window.firebase.apps.length) window.firebase.initializeApp(FIREBASE_CONFIG);
+    db        = window.firebase.firestore();
+    auth      = window.firebase.auth();
+    messaging = window.firebase.messaging();
+    firestoreReady = true;
+
+    auth.onAuthStateChanged(async user => {
+      currentUser = user;
+      setUser(user);
+      if (user) {
+        setFbStatus("online");
+        subscribeEvents(setEvents);
+        await registerPushToken(user, setNotifStatus);
+      } else {
+        setFbStatus("loggedout");
+      }
+    });
+  } catch(e) {
+    console.error("Firebase init:", e);
+    setFbStatus("error");
+  }
+}
+
+function loadScript(src) {
+  return new Promise((res,rej) => {
+    if (document.querySelector(`script[src="${src}"]`)) { res(); return; }
+    const s = document.createElement("script");
+    s.src=src; s.onload=res; s.onerror=rej;
+    document.head.appendChild(s);
+  });
+}
+
+function subscribeEvents(setEvents) {
+  if (!db||!currentUser) return;
+  if (unsubscribe) unsubscribe();
+  unsubscribe = db.collection("familiekalender").doc("events")
+    .onSnapshot(snap => { setEvents(snap.exists ? snap.data().data||{} : {}); },
+    err => console.error("Firestore:", err));
+}
+
+async function persistEvents(events) {
+  if (!db||!currentUser||!firestoreReady) return;
+  try { await db.collection("familiekalender").doc("events").set({ data: events }); }
+  catch(e) { console.error("Firestore write:", e); }
+}
+
+async function registerPushToken(user, setNotifStatus) {
+  if (!messaging || !("Notification" in window)) return;
+
+  // Register service worker first
+  let swReg;
+  try {
+    swReg = await navigator.serviceWorker.register("/firebase-messaging-sw.js");
+  } catch(e) {
+    console.warn("SW register failed:", e);
+    return;
+  }
+
+  const permission = Notification.permission;
+  if (permission === "denied") { setNotifStatus("denied"); return; }
+  if (permission === "default") { setNotifStatus("prompt"); return; }
+
+  // Already granted — get token
+  try {
+    const token = await messaging.getToken({ vapidKey: VAPID_KEY, serviceWorkerRegistration: swReg });
+    if (token) {
+      await saveToken(user.uid, token);
+      setNotifStatus("granted");
+    }
+  } catch(e) {
+    console.warn("FCM token:", e);
+  }
+}
+
+async function requestNotificationPermission(user, setNotifStatus) {
+  if (!messaging) return;
+  try {
+    const permission = await Notification.requestPermission();
+    if (permission === "granted") {
+      await registerPushToken(user, setNotifStatus);
+    } else {
+      setNotifStatus("denied");
+    }
+  } catch(e) { console.error("Permission:", e); }
+}
+
+async function saveToken(uid, token) {
+  if (!db) return;
+  const deviceId = btoa(navigator.userAgent).slice(0,16);
+  try {
+    await db.collection("familiekalender").doc("fcmTokens").set(
+      { tokens: { [uid]: { [deviceId]: token } } },
+      { merge: true }
+    );
+  } catch(e) { console.error("Save token:", e); }
+}
+
+async function signInGoogle() {
+  if (!auth) return;
+  try { await auth.signInWithPopup(new window.firebase.auth.GoogleAuthProvider()); }
+  catch(e) { console.error("Sign in:", e); }
+}
+async function signOut() {
+  if (!auth) return;
+  try { await auth.signOut(); }
+  catch(e) { console.error("Sign out:", e); }
+}
+
+// ─── Component ────────────────────────────────────────────────────────────────
+export default function FamilieKalender() {
+  const today = new Date(); today.setHours(0,0,0,0);
+
+  const [view, setView]               = useState("7days");
+  const [events, setEvents]           = useState({});
+  const [selected, setSelected]       = useState(null);
+  const [modal, setModal]             = useState(null);
+  const [form, setForm]               = useState({ title:"", time:"", member:"olemartin", category:"familie", note:"", reminderMinutes:30 });
+  const [editId, setEditId]           = useState(null);
+  const [activeMembers, setActiveMembers] = useState(FAMILY_MEMBERS.map(m=>m.id));
+  const [monthOffset, setMonthOffset] = useState(0);
+  const [user, setUser]               = useState(null);
+  const [fbStatus, setFbStatus]       = useState("init");
+  const [notifStatus, setNotifStatus] = useState("unknown"); // unknown | prompt | granted | denied
+  const isLocalUpdate = useRef(false);
+
+  useEffect(() => {
+    if (!FIREBASE_CONFIG.apiKey.startsWith("DIN_")) {
+      initFirebase(setUser, ev => {
+        if (!isLocalUpdate.current) setEvents(ev);
+        isLocalUpdate.current = false;
+      }, setFbStatus, setNotifStatus);
+    } else {
+      setFbStatus("demo");
+      try { const r=localStorage.getItem("familiekalender_v2"); if(r) setEvents(JSON.parse(r)); } catch {}
+    }
+    return () => { if(unsubscribe) unsubscribe(); };
+  }, []);
+
+  useEffect(() => {
+    if (fbStatus==="demo") { try { localStorage.setItem("familiekalender_v2",JSON.stringify(events)); } catch {} }
+    else if (fbStatus==="online") { persistEvents(events); }
+  }, [events, fbStatus]);
+
+  const monthYear = {
+    year:  today.getFullYear() + Math.floor((today.getMonth()+monthOffset)/12),
+    month: ((today.getMonth()+monthOffset)%12+12)%12,
+  };
+
+  function getEventsForDate(date) {
+    return (events[dateKey(date)]||[]).filter(e=>activeMembers.includes(e.member));
+  }
+  function openDay(date) { setSelected(date); setModal("detail"); }
+  function openAdd(date) {
+    setSelected(date);
+    setForm({ title:"", time:"", member:"olemartin", category:"familie", note:"", reminderMinutes:30 });
+    setEditId(null);
+    setModal("add");
+  }
+  function openEdit(ev, date) {
+    setSelected(date);
+    setForm({ title:ev.title, time:ev.time||"", member:ev.member, category:ev.category, note:ev.note||"", reminderMinutes:ev.reminderMinutes??30 });
+    setEditId(ev.id);
+    setModal("add");
+  }
+  function saveEvent() {
+    if (!form.title.trim()||!selected) return;
+    const key = dateKey(selected);
+    const existing = events[key]||[];
+    const entry = { ...form, reminderMinutes: Number(form.reminderMinutes) };
+    let updated;
+    if (editId) updated = existing.map(e=>e.id===editId?{...e,...entry}:e);
+    else        updated = [...existing, { ...entry, id:Date.now().toString() }];
+    isLocalUpdate.current=true;
+    setEvents(ev=>({...ev,[key]:updated}));
+    setModal("detail");
+  }
+  function deleteEvent(date,id) {
+    const key=dateKey(date);
+    isLocalUpdate.current=true;
+    setEvents(ev=>({...ev,[key]:(ev[key]||[]).filter(e=>e.id!==id)}));
+  }
+  function toggleMember(id) {
+    setActiveMembers(am=>am.includes(id)?(am.length>1?am.filter(x=>x!==id):am):[...am,id]);
+  }
+  const getMember   = id => FAMILY_MEMBERS.find(m=>m.id===id)||FAMILY_MEMBERS[0];
+  const getCategory = id => CATEGORIES.find(c=>c.id===id)||CATEGORIES[4];
+
+  const sevenDays  = Array.from({length:7},(_,i)=>addDays(today,i));
+  const monthDays  = getMonthDays(monthYear.year,monthYear.month);
+
+  const statusColor = { demo:"#f5a623",connecting:"#aaa",online:"#5ac47d",loggedout:"#ccc",error:"#e05a5a",init:"#ccc" }[fbStatus];
+  const statusLabel = { demo:"Demo",connecting:"Kobler til…",online:"Synkronisert",loggedout:"Ikke innlogget",error:"Feil",init:"…" }[fbStatus];
+
+  // Notification bell color
+  const bellColor = { granted:"#5ac47d", denied:"#e05a5a", prompt:"#f5a623", unknown:"#888" }[notifStatus];
+
+  return (
+    <div style={{ fontFamily:"'DM Sans','Helvetica Neue',sans-serif", background:"#f5f2ee", minHeight:"100vh", color:"#1a1a1a", maxWidth:480, margin:"0 auto", position:"relative" }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:wght@600;700&display=swap');
+        * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+        button { cursor:pointer; border:none; background:none; font-family:inherit; }
+        input,textarea,select { font-family:inherit; }
+        .tap:active { opacity:0.7; }
+        ::-webkit-scrollbar { width:3px; height:3px; }
+        ::-webkit-scrollbar-thumb { background:#ccc; border-radius:2px; }
+        .slide-up { animation:slideUp .22s cubic-bezier(.32,.72,0,1); }
+        @keyframes slideUp { from{transform:translateY(56px);opacity:0}to{transform:translateY(0);opacity:1} }
+      `}</style>
+
+      {/* ── Header ── */}
+      <div style={{ background:"#1a1a1a", color:"white", padding:"16px 16px 0", position:"sticky", top:0, zIndex:10 }}>
+        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10 }}>
+          <div style={{ fontFamily:"'Fraunces',serif", fontSize:19, fontWeight:700 }}>Familiekalender</div>
+          <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+
+            {/* Varsel-knapp */}
+            {fbStatus==="online" && notifStatus!=="granted" && (
+              <button onClick={() => requestNotificationPermission(user, setNotifStatus)}
+                title="Aktiver push-varsler"
+                style={{ fontSize:18, lineHeight:1, padding:"2px 6px", borderRadius:8, background:"rgba(255,255,255,0.1)", border:"1px solid rgba(255,255,255,0.15)" }}>
+                🔔
+              </button>
+            )}
+            {fbStatus==="online" && notifStatus==="granted" && (
+              <div title="Varsler er aktivert" style={{ fontSize:13 }}>🔔<span style={{ fontSize:9, color:"#5ac47d" }}>✓</span></div>
+            )}
+
+            <div style={{ display:"flex", alignItems:"center", gap:4, fontSize:10, opacity:0.55 }}>
+              <div style={{ width:6, height:6, borderRadius:"50%", background:statusColor }} />
+              {statusLabel}
+            </div>
+            {fbStatus!=="demo" && (
+              user
+                ? <button onClick={signOut} style={{ fontSize:10, color:"rgba(255,255,255,0.5)", padding:"4px 8px", border:"1px solid rgba(255,255,255,0.15)", borderRadius:8 }}>Logg ut</button>
+                : <button onClick={signInGoogle} style={{ fontSize:11, fontWeight:600, color:"white", background:"#e07b5a", padding:"5px 10px", borderRadius:8 }}>Logg inn</button>
+            )}
+          </div>
+        </div>
+
+        <div style={{ display:"flex", gap:4, marginBottom:10 }}>
+          {[["7days","7 dager"],["month","Måned"]].map(([v,label])=>(
+            <button key={v} onClick={()=>setView(v)} style={{
+              padding:"5px 14px", borderRadius:16, fontSize:12, fontWeight:600,
+              background:view===v?"white":"rgba(255,255,255,0.1)",
+              color:view===v?"#1a1a1a":"rgba(255,255,255,0.5)", transition:"all .15s",
+            }}>{label}</button>
+          ))}
+        </div>
+
+        <div style={{ display:"flex", gap:6, overflowX:"auto", paddingBottom:12, scrollbarWidth:"none" }}>
+          {FAMILY_MEMBERS.map(m=>(
+            <button key={m.id} onClick={()=>toggleMember(m.id)} className="tap" style={{
+              padding:"4px 11px", borderRadius:16, fontSize:11, fontWeight:600,
+              background:activeMembers.includes(m.id)?m.color:"rgba(255,255,255,0.1)",
+              color:activeMembers.includes(m.id)?"white":"rgba(255,255,255,0.35)",
+              transition:"all .15s", whiteSpace:"nowrap", flexShrink:0,
+            }}>{m.emoji} {m.name}</button>
+          ))}
+        </div>
+      </div>
+
+      {/* ── 7-day view ── */}
+      {view==="7days" && (
+        <div style={{ padding:"12px 12px 0" }}>
+          {sevenDays.map((date,idx)=>{
+            const dayEvs = getEventsForDate(date).sort((a,b)=>(a.time||"99:99").localeCompare(b.time||"99:99"));
+            const isToday = isSameDay(date,today);
+            const dow = (date.getDay()+6)%7;
+            return (
+              <div key={dateKey(date)} style={{ marginBottom:8 }}>
+                <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:4 }}>
+                  <div style={{
+                    width:32, height:32, borderRadius:"50%", flexShrink:0,
+                    background:isToday?"#e07b5a":"rgba(0,0,0,0.06)",
+                    display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center",
+                  }}>
+                    <div style={{ fontSize:9, fontWeight:700, color:isToday?"rgba(255,255,255,0.8)":"#999", lineHeight:1, textTransform:"uppercase" }}>{DAYS_NO[dow]}</div>
+                    <div style={{ fontSize:13, fontWeight:700, color:isToday?"white":"#1a1a1a", lineHeight:1.1 }}>{date.getDate()}</div>
+                  </div>
+                  <div style={{ fontSize:11, color:"#999", fontWeight:500 }}>
+                    {isToday?"I dag":idx===1?"I morgen":MONTHS_SHORT[date.getMonth()]}
+                  </div>
+                  <div style={{ flex:1 }} />
+                  <button onClick={()=>openAdd(date)} className="tap" style={{ width:24,height:24,borderRadius:"50%",background:"rgba(0,0,0,0.06)",fontSize:16,color:"#888",display:"flex",alignItems:"center",justifyContent:"center" }}>+</button>
+                </div>
+                {dayEvs.length===0
+                  ? <div onClick={()=>openAdd(date)} style={{ background:"white",borderRadius:10,padding:"10px 14px",fontSize:12,color:"#ccc",fontStyle:"italic",cursor:"pointer",border:"1px dashed #eee" }}>Ingen hendelser</div>
+                  : dayEvs.map(ev=>{
+                      const member=getMember(ev.member); const cat=getCategory(ev.category);
+                      return (
+                        <div key={ev.id} onClick={()=>openDay(date)} className="tap" style={{
+                          background:"white",borderRadius:10,padding:"10px 14px",marginBottom:4,
+                          display:"flex",alignItems:"center",gap:10,cursor:"pointer",
+                          boxShadow:"0 1px 3px rgba(0,0,0,0.05)",borderLeft:`4px solid ${member.color}`,
+                        }}>
+                          <div style={{ fontSize:18 }}>{cat.icon}</div>
+                          <div style={{ flex:1,minWidth:0 }}>
+                            <div style={{ fontWeight:600,fontSize:14,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>{ev.title}</div>
+                            <div style={{ fontSize:11,color:"#999",marginTop:1 }}>
+                              {ev.time&&<span style={{ fontWeight:600,color:"#666" }}>{ev.time} · </span>}
+                              {member.emoji} {member.name}
+                              {ev.reminderMinutes>0&&ev.time&&<span style={{ marginLeft:4,opacity:.5 }}>· 🔔{ev.reminderMinutes<60?`${ev.reminderMinutes}m`:`${ev.reminderMinutes/60}t`}</span>}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+              </div>
+            );
+          })}
+          <div style={{ height:100 }} />
+        </div>
+      )}
+
+      {/* ── Month view ── */}
+      {view==="month" && (
+        <>
+          <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 16px 4px" }}>
+            <button onClick={()=>setMonthOffset(o=>o-1)} style={{ width:32,height:32,borderRadius:"50%",background:"rgba(0,0,0,0.06)",fontSize:16,display:"flex",alignItems:"center",justifyContent:"center" }}>‹</button>
+            <div style={{ fontFamily:"'Fraunces',serif",fontSize:18,fontWeight:700 }}>{MONTHS_NO[monthYear.month]} {monthYear.year}</div>
+            <button onClick={()=>setMonthOffset(o=>o+1)} style={{ width:32,height:32,borderRadius:"50%",background:"rgba(0,0,0,0.06)",fontSize:16,display:"flex",alignItems:"center",justifyContent:"center" }}>›</button>
+          </div>
+          <div style={{ display:"grid",gridTemplateColumns:"repeat(7,1fr)",padding:"0 2px" }}>
+            {DAYS_NO.map(d=><div key={d} style={{ textAlign:"center",fontSize:9,fontWeight:700,letterSpacing:1,textTransform:"uppercase",color:"#bbb",paddingBottom:6 }}>{d}</div>)}
+          </div>
+          <div style={{ display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:1,background:"#e8e4df",borderTop:"1px solid #e8e4df",borderLeft:"1px solid #e8e4df" }}>
+            {monthDays.map((day,i)=>{
+              if(!day) return <div key={`e${i}`} style={{ background:"#f5f2ee",minHeight:64 }} />;
+              const date=new Date(monthYear.year,monthYear.month,day);
+              const isToday=isSameDay(date,today);
+              const dayEvs=getEventsForDate(date);
+              const isPast=date<today;
+              return (
+                <div key={`d${day}`} onClick={()=>openDay(date)} className="tap" style={{
+                  background:isToday?"#fff8f5":"#f5f2ee",minHeight:64,padding:"5px 3px",cursor:"pointer",
+                  opacity:isPast&&!dayEvs.length?.45:1,
+                }}>
+                  <div style={{ width:20,height:20,borderRadius:"50%",background:isToday?"#e07b5a":"transparent",color:isToday?"white":isPast?"#bbb":"#1a1a1a",fontSize:10,fontWeight:isToday?700:500,display:"flex",alignItems:"center",justifyContent:"center",marginBottom:2 }}>{day}</div>
+                  {dayEvs.slice(0,3).map(ev=>{
+                    const member=getMember(ev.member);
+                    return <div key={ev.id} style={{ background:member.color+"25",borderLeft:`2px solid ${member.color}`,borderRadius:"0 2px 2px 0",padding:"1px 2px",fontSize:8,fontWeight:600,color:"#1a1a1a",overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",lineHeight:1.5,marginBottom:1 }}>
+                      {ev.time&&<span style={{ opacity:.5 }}>{ev.time} </span>}{ev.title}
+                    </div>;
+                  })}
+                  {dayEvs.length>3&&<div style={{ fontSize:8,color:"#aaa",paddingLeft:3 }}>+{dayEvs.length-3}</div>}
+                </div>
+              );
+            })}
+          </div>
+          <div style={{ height:100 }} />
+        </>
+      )}
+
+      {/* ── FAB ── */}
+      <button onClick={()=>openAdd(today)} style={{ position:"fixed",bottom:24,right:24,width:52,height:52,borderRadius:"50%",background:"#e07b5a",color:"white",fontSize:26,boxShadow:"0 4px 16px rgba(224,123,90,.45)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:20 }}>+</button>
+
+      {/* ── Day detail sheet ── */}
+      {modal==="detail"&&selected&&(()=>{
+        const dayEvs=getEventsForDate(selected).sort((a,b)=>(a.time||"99:99").localeCompare(b.time||"99:99"));
+        const dow=(selected.getDay()+6)%7;
+        return (
+          <div style={{ position:"fixed",inset:0,zIndex:30,display:"flex",flexDirection:"column",justifyContent:"flex-end" }} onClick={()=>setModal(null)}>
+            <div style={{ background:"rgba(0,0,0,0.4)",position:"absolute",inset:0 }} />
+            <div className="slide-up" onClick={e=>e.stopPropagation()} style={{ background:"#f5f2ee",borderRadius:"20px 20px 0 0",padding:"20px 16px 44px",position:"relative",maxHeight:"82vh",overflowY:"auto" }}>
+              <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14 }}>
+                <div>
+                  <div style={{ fontFamily:"'Fraunces',serif",fontSize:22,fontWeight:700,lineHeight:1.1 }}>{selected.getDate()}. {MONTHS_NO[selected.getMonth()]}</div>
+                  <div style={{ fontSize:11,color:"#999",textTransform:"uppercase",letterSpacing:1,marginTop:2 }}>{DAYS_NO[dow]}</div>
+                </div>
+                <button onClick={()=>openAdd(selected)} style={{ background:"#e07b5a",color:"white",borderRadius:18,padding:"8px 14px",fontSize:13,fontWeight:600 }}>+ Legg til</button>
+              </div>
+              {dayEvs.length===0
+                ? <div style={{ color:"#bbb",textAlign:"center",padding:"28px 0",fontSize:14 }}>Ingen hendelser 🌿</div>
+                : dayEvs.map(ev=>{
+                    const member=getMember(ev.member); const cat=getCategory(ev.category);
+                    const rMin = ev.reminderMinutes;
+                    const rLabel = rMin===0?"Ingen varsel":rMin<60?`${rMin} min før`:`${rMin/60} time${rMin>60?"r":""} før`;
+                    return (
+                      <div key={ev.id} style={{ background:"white",borderRadius:12,padding:"12px",marginBottom:8,borderLeft:`4px solid ${member.color}`,boxShadow:"0 1px 4px rgba(0,0,0,0.05)" }}>
+                        <div style={{ display:"flex",alignItems:"flex-start",gap:10 }}>
+                          <div style={{ fontSize:20,marginTop:1 }}>{cat.icon}</div>
+                          <div style={{ flex:1,minWidth:0 }}>
+                            <div style={{ fontWeight:700,fontSize:15 }}>{ev.title}</div>
+                            <div style={{ fontSize:11,color:"#999",marginTop:2 }}>
+                              {ev.time&&<span style={{ fontWeight:600,color:"#555" }}>{ev.time} · </span>}
+                              {member.emoji} {member.name} · {cat.label}
+                            </div>
+                            {ev.time&&<div style={{ fontSize:11,color:"#bbb",marginTop:2 }}>🔔 {rLabel}</div>}
+                            {ev.note&&<div style={{ fontSize:12,color:"#666",marginTop:4,fontStyle:"italic" }}>{ev.note}</div>}
+                          </div>
+                          <div style={{ display:"flex",gap:4,flexShrink:0 }}>
+                            <button onClick={()=>openEdit(ev,selected)} className="tap" style={{ fontSize:15,opacity:.4,padding:4 }}>✏️</button>
+                            <button onClick={()=>deleteEvent(selected,ev.id)} className="tap" style={{ fontSize:15,opacity:.4,padding:4 }}>🗑️</button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ── Add/edit sheet ── */}
+      {modal==="add"&&selected&&(
+        <div style={{ position:"fixed",inset:0,zIndex:40,display:"flex",flexDirection:"column",justifyContent:"flex-end" }} onClick={()=>setModal("detail")}>
+          <div style={{ background:"rgba(0,0,0,0.5)",position:"absolute",inset:0 }} />
+          <div className="slide-up" onClick={e=>e.stopPropagation()} style={{ background:"white",borderRadius:"20px 20px 0 0",padding:"22px 16px 44px",position:"relative" }}>
+            <div style={{ fontFamily:"'Fraunces',serif",fontSize:17,fontWeight:700,marginBottom:14 }}>
+              {editId?"Rediger hendelse":`${selected.getDate()}. ${MONTHS_NO[selected.getMonth()]}`}
+            </div>
+
+            <input value={form.title} onChange={e=>setForm(f=>({...f,title:e.target.value}))}
+              placeholder="Hva skjer? *" autoFocus style={{ width:"100%",padding:"12px 13px",borderRadius:10,border:"1.5px solid #eee",fontSize:15,fontWeight:500,background:"#fafafa",outline:"none",marginBottom:10 }} />
+
+            <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10 }}>
+              <input type="time" value={form.time} onChange={e=>setForm(f=>({...f,time:e.target.value}))}
+                style={{ padding:"10px 11px",borderRadius:10,border:"1.5px solid #eee",fontSize:14,background:"#fafafa",outline:"none" }} />
+              <select value={form.member} onChange={e=>setForm(f=>({...f,member:e.target.value}))}
+                style={{ padding:"10px 11px",borderRadius:10,border:"1.5px solid #eee",fontSize:13,background:"#fafafa",outline:"none" }}>
+                {FAMILY_MEMBERS.map(m=><option key={m.id} value={m.id}>{m.emoji} {m.name}</option>)}
+              </select>
+            </div>
+
+            <div style={{ display:"flex",gap:5,flexWrap:"wrap",marginBottom:10 }}>
+              {CATEGORIES.map(cat=>(
+                <button key={cat.id} onClick={()=>setForm(f=>({...f,category:cat.id}))} style={{
+                  padding:"5px 11px",borderRadius:14,fontSize:11,fontWeight:600,
+                  background:form.category===cat.id?"#1a1a1a":"#f0ede8",
+                  color:form.category===cat.id?"white":"#666",transition:"all .12s",
+                }}>{cat.icon} {cat.label}</button>
+              ))}
+            </div>
+
+            {/* Reminder selector — vises kun hvis klokkeslett er satt */}
+            {form.time && (
+              <div style={{ marginBottom:10 }}>
+                <div style={{ fontSize:11,fontWeight:600,color:"#aaa",marginBottom:5,textTransform:"uppercase",letterSpacing:.8 }}>🔔 Påminnelse</div>
+                <div style={{ display:"flex",gap:5,flexWrap:"wrap" }}>
+                  {REMINDER_OPTIONS.map(opt=>(
+                    <button key={opt.value} onClick={()=>setForm(f=>({...f,reminderMinutes:opt.value}))} style={{
+                      padding:"5px 11px",borderRadius:14,fontSize:11,fontWeight:600,
+                      background:form.reminderMinutes===opt.value?"#1a1a1a":"#f0ede8",
+                      color:form.reminderMinutes===opt.value?"white":"#666",transition:"all .12s",
+                    }}>{opt.label}</button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <textarea value={form.note} onChange={e=>setForm(f=>({...f,note:e.target.value}))}
+              placeholder="Notat (valgfritt)" rows={2} style={{ width:"100%",padding:"10px 13px",borderRadius:10,border:"1.5px solid #eee",fontSize:13,background:"#fafafa",resize:"none",outline:"none",marginBottom:14 }} />
+
+            <button onClick={saveEvent} disabled={!form.title.trim()} style={{
+              width:"100%",padding:"13px",borderRadius:12,
+              background:form.title.trim()?"#e07b5a":"#ddd",
+              color:"white",fontSize:15,fontWeight:700,transition:"background .2s",
+            }}>{editId?"Lagre endringer":"Legg til"}</button>
+          </div>
+        </div>
+      )}
+
+      {/* Demo banner */}
+      {fbStatus==="demo"&&(
+        <div style={{ position:"fixed",bottom:90,left:12,right:12,zIndex:15,background:"#1a1a1a",color:"white",borderRadius:14,padding:"12px 14px",fontSize:12,boxShadow:"0 4px 20px rgba(0,0,0,0.2)" }}>
+          <div style={{ fontWeight:700,marginBottom:4 }}>⚡ Demo-modus</div>
+          <div style={{ opacity:.6,lineHeight:1.5 }}>Bytt ut Firebase-konfigen for synkronisering og push-varsler.</div>
+        </div>
+      )}
+    </div>
+  );
+}
 /**
- * Familiekalender – Firebase Cloud Functions
- * Sender push-varsler:
- *   1. Øyeblikkelig – når noen legger inn en ny hendelse  ← Firestore-trigger
- *   2. Dagen før kl. 20:00                               ← Scheduled
- *   3. Samme morgen kl. 07:00                            ← Scheduled
- *   4. X minutter før hendelsen starter                  ← Scheduled
+ * firebase-messaging-sw.js
+ * Må ligge i PUBLIC-mappen (roten av nettstedet ditt).
+ * F.eks.: annette-678.github.io/Sykluslogg/firebase-messaging-sw.js
  *
- * Deploy: firebase deploy --only functions
+ * Denne filen mottar push-varsler selv når appen er lukket.
  */
 
-const functions = require("firebase-functions");
-const admin     = require("firebase-admin");
-
-admin.initializeApp();
-const db = admin.firestore();
-
-// ─── Trigger: ny hendelse lagt inn ───────────────────────────────────────────
-// Fyrer av automatisk hver gang events-dokumentet skrives til i Firestore.
-// Finner nye hendelser ved å sammenligne gammel og ny versjon av dokumentet,
-// og sender varsel umiddelbart til alle registrerte enheter.
-
-exports.notifyOnNewEvent = functions
-  .region("europe-west1")
-  .firestore.document("familiekalender/events")
-  .onWrite(async (change) => {
-    if (!change.after.exists) return null;
-
-    const newData  = change.after.data()?.data  || {};
-    const prevData = change.before.exists ? (change.before.data()?.data || {}) : {};
-
-    const tokens = await getAllTokens();
-    if (!tokens.length) return null;
-
-    const toSend = [];
-
-    for (const [dateStr, dayEvents] of Object.entries(newData)) {
-      const prevIds = new Set((prevData[dateStr] || []).map(e => e.id));
-
-      for (const ev of dayEvents) {
-        // Kun send for hendelser som ikke fantes i forrige versjon
-        if (prevIds.has(ev.id)) continue;
-
-        const [y, mo, d] = dateStr.split("-").map(Number);
-        const dateObj    = new Date(y, mo - 1, d);
-        const dayLabel   = formatDateLabel(dateObj);
-        const timeLabel  = ev.time ? ` kl. ${ev.time}` : "";
-
-        toSend.push({
-          title: `📆 Ny hendelse: ${ev.title}`,
-          body:  `${dayLabel}${timeLabel} – ${memberName(ev.member)}`,
-          tag:   `${ev.id}-new`,
-        });
-      }
-    }
-
-    if (!toSend.length) return null;
-
-    const sends = toSend.flatMap(n =>
-      tokens.map(token =>
-        admin.messaging().send({
-          token,
-          notification: { title: n.title, body: n.body },
-          webpush: {
-            notification: {
-              icon:     "/icon-192.png",
-              badge:    "/badge-72.png",
-              tag:      n.tag,
-              renotify: true,
-            },
-            fcmOptions: { link: "/" },
-          },
-        }).catch(err => {
-          if (err.code === "messaging/registration-token-not-registered") {
-            return removeToken(token);
-          }
-        })
-      )
-    );
-
-    await Promise.all(sends);
-    console.log(`New-event: sent ${toSend.length} notification(s) to ${tokens.length} device(s)`);
-    return null;
-  });
-
-// ─── Kjør hvert minutt ────────────────────────────────────────────────────────
-exports.sendScheduledNotifications = functions
-  .region("europe-west1")           // velg region nærmest dere
-  .pubsub.schedule("every 1 minutes")
-  .timeZone("Europe/Oslo")
-  .onRun(async () => {
-    const now    = new Date();
-    const tokens = await getAllTokens();
-    if (!tokens.length) return null;
-
-    const eventsDoc = await db.collection("familiekalender").doc("events").get();
-    if (!eventsDoc.exists) return null;
-    const allEvents = eventsDoc.data().data || {};   // { "2026-06-10": [{...}] }
-
-    const toSend = [];
-
-    for (const [dateStr, dayEvents] of Object.entries(allEvents)) {
-      for (const ev of dayEvents) {
-        if (!ev.time) continue;   // hopp over hendelser uten klokkeslett
-
-        const [h, m]       = ev.time.split(":").map(Number);
-        const [y, mo, d]   = dateStr.split("-").map(Number);
-        const eventTime    = new Date(y, mo - 1, d, h, m, 0);
-        const msUntil      = eventTime - now;
-
-        // Allerede passert
-        if (msUntil < 0) continue;
-
-        const minutesUntil = msUntil / 60000;
-        const hoursUntil   = msUntil / 3600000;
-
-        // ── 1. Dagen før kl. 20:00 ──────────────────────────────────────────
-        // Vi sjekker om det er mellom 20:00 og 20:01 dagen FØR hendelsen
-        const dayBefore = new Date(eventTime);
-        dayBefore.setDate(dayBefore.getDate() - 1);
-        dayBefore.setHours(20, 0, 0, 0);
-        if (isWithinMinute(now, dayBefore)) {
-          toSend.push({
-            title: `📅 I morgen: ${ev.title}`,
-            body:  `Kl. ${ev.time} – ${memberName(ev.member)}`,
-            tag:   `${ev.id}-dayBefore`,
-          });
-        }
-
-        // ── 2. Samme morgen kl. 07:00 ───────────────────────────────────────
-        const sameDay7 = new Date(eventTime);
-        sameDay7.setHours(7, 0, 0, 0);
-        // Kun send dersom hendelsen er ETTER kl 07 (ellers sender vi etter)
-        if (eventTime > sameDay7 && isWithinMinute(now, sameDay7)) {
-          toSend.push({
-            title: `☀️ I dag: ${ev.title}`,
-            body:  `Kl. ${ev.time} – ${memberName(ev.member)}`,
-            tag:   `${ev.id}-morning`,
-          });
-        }
-
-        // ── 3. X minutter før (standard: 30 min, kan overstyres per hendelse) ─
-        const reminderMinutes = ev.reminderMinutes ?? 30;
-        const reminderTime    = new Date(eventTime.getTime() - reminderMinutes * 60000);
-        if (isWithinMinute(now, reminderTime)) {
-          const label = reminderMinutes >= 60
-            ? `${reminderMinutes / 60} time${reminderMinutes > 60 ? "r" : ""}`
-            : `${reminderMinutes} min`;
-          toSend.push({
-            title: `⏰ Om ${label}: ${ev.title}`,
-            body:  `Kl. ${ev.time} – ${memberName(ev.member)}`,
-            tag:   `${ev.id}-reminder`,
-          });
-        }
-      }
-    }
-
-    if (!toSend.length) return null;
-
-    // Send alle varsler til alle registrerte enheter
-    const sends = toSend.flatMap(n =>
-      tokens.map(token =>
-        admin.messaging().send({
-          token,
-          notification: { title: n.title, body: n.body },
-          webpush: {
-            notification: {
-              icon:  "/icon-192.png",
-              badge: "/badge-72.png",
-              tag:   n.tag,         // hindrer duplikater
-              renotify: false,
-            },
-            fcmOptions: { link: "/" },
-          },
-        }).catch(err => {
-          // Fjern utgytte tokens automatisk
-          if (err.code === "messaging/registration-token-not-registered") {
-            return removeToken(token);
-          }
-        })
-      )
-    );
-
-    await Promise.all(sends);
-    console.log(`Sent ${toSend.length} notification(s) to ${tokens.length} device(s)`);
-    return null;
-  });
-
-// ─── Hjelpefunksjoner ─────────────────────────────────────────────────────────
-
-/** Formaterer dato til lesbart norsk (I dag / I morgen / man 9. jun) */
-function formatDateLabel(date) {
-  const today    = new Date(); today.setHours(0,0,0,0);
-  const tomorrow = new Date(today); tomorrow.setDate(today.getDate() + 1);
-  if (date.toDateString() === today.toDateString())    return "I dag";
-  if (date.toDateString() === tomorrow.toDateString()) return "I morgen";
-  const days   = ["søn","man","tir","ons","tor","fre","lør"];
-  const months = ["jan","feb","mar","apr","mai","jun","jul","aug","sep","okt","nov","des"];
-  return `${days[date.getDay()]} ${date.getDate()}. ${months[date.getMonth()]}`;
-}
-
-/** Sjekk om now er innen 1 minutt etter target */
-function isWithinMinute(now, target) {
-  const diff = now - target;
-  return diff >= 0 && diff < 60000;
-}
-
-const MEMBER_NAMES = {
-  olemartin: "Ole Martin",
-  annette:   "Annette",
-  aria:      "Aria",
-  falk:      "Falk",
+// ─── BYTT UT med dine egne Firebase-verdier ───────────────────────────────────
+const FIREBASE_CONFIG = {
+  apiKey:            "AIzaSyAKZ3N_RhjX2-bP9KQNKvBpNbJMMqZEu3w",
+  authDomain:        "familieplanlegger-a978d.firebaseapp.com",
+  projectId:         "familieplanlegger-a978d",
+  storageBucket:     "familieplanlegger-a978d.firebasestorage.app",
+  messagingSenderId: "107531873859",
+  appId:             "1:107531873859:web:b8b8645b40840c33abeef6",
 };
-function memberName(id) {
-  return MEMBER_NAMES[id] || id;
-}
+// ─────────────────────────────────────────────────────────────────────────────
 
-/** Hent alle FCM-tokens fra Firestore */
-async function getAllTokens() {
-  try {
-    const snap = await db.collection("familiekalender").doc("fcmTokens").get();
-    if (!snap.exists) return [];
-    const data = snap.data().tokens || {};
-    // data = { userId: { deviceId: token, ... }, ... }
-    return Object.values(data).flatMap(userTokens => Object.values(userTokens));
-  } catch (e) {
-    console.error("Could not fetch tokens:", e);
-    return [];
-  }
-}
+importScripts("https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js");
+importScripts("https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging-compat.js");
 
-/** Fjern et token som ikke lenger er gyldig */
-async function removeToken(token) {
-  try {
-    const snap = await db.collection("familiekalender").doc("fcmTokens").get();
-    if (!snap.exists) return;
-    const data = snap.data().tokens || {};
-    for (const [uid, userTokens] of Object.entries(data)) {
-      for (const [did, t] of Object.entries(userTokens)) {
-        if (t === token) {
-          delete data[uid][did];
+firebase.initializeApp(FIREBASE_CONFIG);
+const messaging = firebase.messaging();
+
+// Håndter varsler i bakgrunnen (appen lukket / i bakgrunn)
+messaging.onBackgroundMessage(payload => {
+  const { title, body } = payload.notification;
+  self.registration.showNotification(title, {
+    body,
+    icon:  "/icon-192.png",
+    badge: "/badge-72.png",
+    tag:   payload.data?.tag || "familiekalender",
+    data:  { url: "/" },
+  });
+});
+
+// Klikk på varselet åpner appen
+self.addEventListener("notificationclick", event => {
+  event.notification.close();
+  event.waitUntil(
+    clients.matchAll({ type: "window", includeUncontrolled: true }).then(list => {
+      for (const client of list) {
+        if (client.url.includes(self.location.origin) && "focus" in client) {
+          return client.focus();
         }
       }
-    }
-    await db.collection("familiekalender").doc("fcmTokens").set({ tokens: data });
-  } catch (e) {
-    console.error("Could not remove token:", e);
-  }
-}
+      return clients.openWindow("/");
+    })
+  );
+});
+
