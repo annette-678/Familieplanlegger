@@ -112,6 +112,8 @@
         auth      = window.firebase.auth();
         messaging = window.firebase.messaging();
         firestoreReady = true;
+        // Behold innlogging ved app-restart fra hjemskjerm (iOS PWA)
+        await auth.setPersistence(window.firebase.auth.Auth.Persistence.LOCAL);
         auth.onAuthStateChanged(async user => {
           currentUser = user;
           setUser(user);
@@ -265,7 +267,7 @@
       return (
         <div>
           {/* ── Header ── */}
-          <div style={{ background:"#1a1a1a", color:"white", padding:"16px 16px 0", position:"sticky", top:0, zIndex:10 }}>
+          <div style={{ background:"#1a1a1a", color:"white", paddingTop:"max(16px, env(safe-area-inset-top))", paddingLeft:"16px", paddingRight:"16px", paddingBottom:0, position:"sticky", top:0, zIndex:10 }}>
             <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10 }}>
               <div style={{ fontFamily:"'Fraunces',serif", fontSize:19, fontWeight:700 }}>Familiekalender</div>
               <div style={{ display:"flex", alignItems:"center", gap:8 }}>
@@ -283,10 +285,9 @@
                   <div style={{ width:6, height:6, borderRadius:"50%", background:statusColor }} />
                   {statusLabel}
                 </div>
-                {user
-                  ? <button onClick={signOut} style={{ fontSize:10, color:"rgba(255,255,255,0.5)", padding:"4px 8px", border:"1px solid rgba(255,255,255,0.15)", borderRadius:8 }}>Logg ut</button>
-                  : <button onClick={signInGoogle} style={{ fontSize:11, fontWeight:600, color:"white", background:"#e07b5a", padding:"5px 10px", borderRadius:8 }}>Logg inn</button>
-                }
+                {user && (
+                  <button onClick={signOut} style={{ fontSize:10, color:"rgba(255,255,255,0.5)", padding:"4px 8px", border:"1px solid rgba(255,255,255,0.15)", borderRadius:8 }}>Logg ut</button>
+                )}
               </div>
             </div>
             <div style={{ display:"flex", gap:4, marginBottom:10 }}>
@@ -504,12 +505,16 @@
             </div>
           )}
 
-          {/* Login prompt */}
-          {fbStatus==="loggedout" && (
-            <div style={{ position:"fixed",bottom:90,left:12,right:12,zIndex:15,background:"#1a1a1a",color:"white",borderRadius:14,padding:"14px 16px",boxShadow:"0 4px 20px rgba(0,0,0,0.2)" }}>
-              <div style={{ fontWeight:700,marginBottom:6,fontSize:14 }}>Logg inn for å synkronisere</div>
-              <div style={{ opacity:.6,fontSize:12,marginBottom:12,lineHeight:1.5 }}>Alle i familien logger inn med Google for å se samme kalender.</div>
-              <button onClick={signInGoogle} style={{ width:"100%",padding:"11px",borderRadius:10,background:"#e07b5a",color:"white",fontSize:14,fontWeight:700 }}>Logg inn med Google</button>
+          {/* Login prompt — shown as bottom sheet when not logged in */}
+          {(fbStatus==="loggedout"||fbStatus==="init") && !user && (
+            <div style={{ position:"fixed",inset:0,zIndex:50,display:"flex",flexDirection:"column",justifyContent:"flex-end" }}>
+              <div style={{ background:"rgba(0,0,0,0.5)",position:"absolute",inset:0 }} />
+              <div style={{ background:"white",borderRadius:"20px 20px 0 0",padding:"28px 20px 48px",position:"relative",textAlign:"center" }}>
+                <div style={{ fontSize:40,marginBottom:12 }}>📅</div>
+                <div style={{ fontFamily:"'Fraunces',serif",fontSize:22,fontWeight:700,marginBottom:8 }}>Familiekalender</div>
+                <div style={{ color:"#888",fontSize:14,marginBottom:24,lineHeight:1.6 }}>Logg inn med Google for å se og dele familiekalenderen på tvers av alle enheter.</div>
+                <button onClick={signInGoogle} style={{ width:"100%",padding:"14px",borderRadius:12,background:"#e07b5a",color:"white",fontSize:16,fontWeight:700,boxShadow:"0 4px 12px rgba(224,123,90,0.4)" }}>Logg inn med Google</button>
+              </div>
             </div>
           )}
         </div>
