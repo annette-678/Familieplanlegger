@@ -133,17 +133,34 @@
     }
 
     function subscribeEvents(setEvents) {
-      if (!db||!currentUser) return;
+      if (!db||!currentUser) { console.warn("subscribeEvents: mangler db eller user"); return; }
       if (unsubscribe) unsubscribe();
+      console.log("Starter Firestore-lytter for uid:", currentUser.uid);
       unsubscribe = db.collection("familiekalender").doc("events")
-        .onSnapshot(snap => { setEvents(snap.exists ? snap.data().data||{} : {}); },
-        err => console.error("Firestore:", err));
+        .onSnapshot(snap => {
+          if (snap.exists) {
+            const data = snap.data().data || {};
+            console.log("Firestore snapshot mottatt, antall dager med data:", Object.keys(data).length);
+            setEvents(data);
+          } else {
+            console.log("Firestore: dokumentet finnes ikke ennå");
+            setEvents({});
+          }
+        }, err => console.error("Firestore lyttefeil:", err));
     }
 
     async function persistEvents(events) {
-      if (!db||!currentUser||!firestoreReady) return;
-      try { await db.collection("familiekalender").doc("events").set({ data: events }); }
-      catch(e) { console.error("Firestore write:", e); }
+      if (!db||!currentUser||!firestoreReady) {
+        console.warn("persistEvents: ikke klar", {db:!!db, user:!!currentUser, ready:firestoreReady});
+        return;
+      }
+      try {
+        const antall = Object.values(events).flat().length;
+        console.log("Lagrer til Firestore, totalt", antall, "hendelser");
+        await db.collection("familiekalender").doc("events").set({ data: events });
+        console.log("Lagret OK");
+      }
+      catch(e) { console.error("Firestore skriv-feil:", e); }
     }
 
     async function registerPushToken(user, setNotifStatus) {
