@@ -108,25 +108,26 @@
           loadScript("https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging-compat.js"),
         ]);
         if (!window.firebase.apps.length) window.firebase.initializeApp(FIREBASE_CONFIG);
-        db        = window.firebase.firestore();
-        auth      = window.firebase.auth();
-        messaging = window.firebase.messaging();
+        db   = window.firebase.firestore();
+        auth = window.firebase.auth();
+        // Initialiser messaging separat — ikke la det kræsje hele appen
+        try { messaging = window.firebase.messaging(); } catch(me) { console.warn("Messaging ikke tilgjengelig:", me); }
         firestoreReady = true;
         // Behold innlogging ved app-restart fra hjemskjerm (iOS PWA)
-        await auth.setPersistence(window.firebase.auth.Auth.Persistence.LOCAL);
+        try { await auth.setPersistence(window.firebase.auth.Auth.Persistence.LOCAL); } catch(pe) { console.warn("Persistence:", pe); }
         auth.onAuthStateChanged(async user => {
           currentUser = user;
           setUser(user);
           if (user) {
             setFbStatus("online");
             subscribeEvents(setEvents);
-            await registerPushToken(user, setNotifStatus);
+            try { await registerPushToken(user, setNotifStatus); } catch(te) { console.warn("Push token:", te); }
           } else {
             setFbStatus("loggedout");
           }
         });
       } catch(e) {
-        console.error("Firebase init:", e);
+        console.error("Firebase init error:", e);
         setFbStatus("error");
       }
     }
@@ -281,10 +282,12 @@
                 {fbStatus==="online" && notifStatus==="granted" && (
                   <span title="Varsler aktivert" style={{ fontSize:13 }}>🔔<span style={{ fontSize:9, color:"#5ac47d" }}>✓</span></span>
                 )}
-                <div style={{ display:"flex", alignItems:"center", gap:4, fontSize:10, opacity:0.55 }}>
-                  <div style={{ width:6, height:6, borderRadius:"50%", background:statusColor }} />
-                  {statusLabel}
-                </div>
+                {user && (
+                  <div style={{ display:"flex", alignItems:"center", gap:4, fontSize:10, opacity:0.55 }}>
+                    <div style={{ width:6, height:6, borderRadius:"50%", background:statusColor }} />
+                    {statusLabel}
+                  </div>
+                )}
                 {user && (
                   <button onClick={signOut} style={{ fontSize:10, color:"rgba(255,255,255,0.5)", padding:"4px 8px", border:"1px solid rgba(255,255,255,0.15)", borderRadius:8 }}>Logg ut</button>
                 )}
@@ -506,14 +509,22 @@
           )}
 
           {/* Login prompt — shown as bottom sheet when not logged in */}
-          {(fbStatus==="loggedout"||fbStatus==="init") && !user && (
+          {(fbStatus==="loggedout"||fbStatus==="init"||fbStatus==="error") && !user && (
             <div style={{ position:"fixed",inset:0,zIndex:50,display:"flex",flexDirection:"column",justifyContent:"flex-end" }}>
               <div style={{ background:"rgba(0,0,0,0.5)",position:"absolute",inset:0 }} />
               <div style={{ background:"white",borderRadius:"20px 20px 0 0",padding:"28px 20px 48px",position:"relative",textAlign:"center" }}>
                 <div style={{ fontSize:40,marginBottom:12 }}>📅</div>
                 <div style={{ fontFamily:"'Fraunces',serif",fontSize:22,fontWeight:700,marginBottom:8 }}>Familiekalender</div>
+                {fbStatus==="error" && (
+                  <div style={{ background:"#fff3f0",borderRadius:10,padding:"10px 14px",marginBottom:16,fontSize:12,color:"#c0392b",lineHeight:1.5 }}>
+                    ⚠️ Kunne ikke koble til. Sjekk at du har internett og prøv igjen.
+                  </div>
+                )}
                 <div style={{ color:"#888",fontSize:14,marginBottom:24,lineHeight:1.6 }}>Logg inn med Google for å se og dele familiekalenderen på tvers av alle enheter.</div>
                 <button onClick={signInGoogle} style={{ width:"100%",padding:"14px",borderRadius:12,background:"#e07b5a",color:"white",fontSize:16,fontWeight:700,boxShadow:"0 4px 12px rgba(224,123,90,0.4)" }}>Logg inn med Google</button>
+                {fbStatus==="error" && (
+                  <button onClick={()=>window.location.reload()} style={{ width:"100%",padding:"12px",borderRadius:12,background:"#f0ede8",color:"#555",fontSize:14,fontWeight:600,marginTop:10 }}>🔄 Last siden på nytt</button>
+                )}
               </div>
             </div>
           )}
