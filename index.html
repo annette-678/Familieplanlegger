@@ -86,7 +86,7 @@
     }
 
     // ─── Firebase helpers ───────────────────────────────────────────────────────
-    let db=null, auth=null, messaging=null, currentUser=null, firestoreReady=false;
+    let db=null, auth=null, messaging=null, currentUser=null, firestoreReady=false, firestoreLoaded=false;
     let unsubscribe=null;
 
     function loadScript(src) {
@@ -141,17 +141,19 @@
           if (snap.exists) {
             const data = snap.data().data || {};
             console.log("Firestore snapshot mottatt, antall dager med data:", Object.keys(data).length);
+            firestoreLoaded = true;
             setEvents(data);
           } else {
             console.log("Firestore: dokumentet finnes ikke ennå");
+            firestoreLoaded = true;
             setEvents({});
           }
         }, err => console.error("Firestore lyttefeil:", err));
     }
 
     async function persistEvents(events) {
-      if (!db||!currentUser||!firestoreReady) {
-        console.warn("persistEvents: ikke klar", {db:!!db, user:!!currentUser, ready:firestoreReady});
+      if (!db||!currentUser||!firestoreReady||!firestoreLoaded) {
+        console.warn("persistEvents: ikke klar ennå", {db:!!db, user:!!currentUser, ready:firestoreReady, loaded:firestoreLoaded});
         return;
       }
       try {
@@ -204,7 +206,7 @@
     }
     async function signOut() {
       if (!auth) return;
-      try { await auth.signOut(); }
+      try { firestoreLoaded = false; await auth.signOut(); }
       catch(e) { console.error("Sign out:", e); }
     }
 
