@@ -1,8 +1,9 @@
 <!DOCTYPE html>
-<html lang="no">
+<html lang="nb-NO">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="format-detection" content="telephone=no" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -532,11 +533,13 @@
                   <div>
                     <div style={{ fontSize:10,fontWeight:600,color:"#bbb",marginBottom:4,textTransform:"uppercase",letterSpacing:.8 }}>Fra</div>
                     <input type="time" value={form.time} onChange={e=>setForm(f=>({...f,time:e.target.value}))}
+                      step="60" pattern="[0-9]{2}:[0-9]{2}"
                       style={{ width:"100%",padding:"10px 11px",borderRadius:10,border:"1.5px solid #eee",fontSize:14,background:"#fafafa",outline:"none" }} />
                   </div>
                   <div>
                     <div style={{ fontSize:10,fontWeight:600,color:"#bbb",marginBottom:4,textTransform:"uppercase",letterSpacing:.8 }}>Til (tid)</div>
                     <input type="time" value={form.timeEnd} onChange={e=>setForm(f=>({...f,timeEnd:e.target.value}))}
+                      step="60" pattern="[0-9]{2}:[0-9]{2}"
                       style={{ width:"100%",padding:"10px 11px",borderRadius:10,border:"1.5px solid #eee",fontSize:14,background:"#fafafa",outline:"none" }} />
                   </div>
                 </div>
