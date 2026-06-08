@@ -218,7 +218,7 @@
       const [events, setEvents]           = useState({});
       const [selected, setSelected]       = useState(null);
       const [modal, setModal]             = useState(null);
-      const [form, setForm]               = useState({ title:"", time:"", member:"olemartin", category:"familie", note:"", reminderMinutes:30 });
+      const [form, setForm]               = useState({ title:"", time:"", timeEnd:"", dateEnd:"", member:"olemartin", category:"familie", note:"", reminderMinutes:30 });
       const [editId, setEditId]           = useState(null);
       const [activeMembers, setActiveMembers] = useState(FAMILY_MEMBERS.map(m=>m.id));
       const [monthOffset, setMonthOffset] = useState(0);
@@ -245,35 +245,73 @@
       };
 
       function getEventsForDate(date) {
-        return (events[dateKey(date)]||[]).filter(e=>activeMembers.includes(e.member));
+        const key = dateKey(date);
+        const seen = new Set();
+        return (events[key]||[]).filter(e => {
+          if (!activeMembers.includes(e.member)) return false;
+          if (seen.has(e.id)) return false;
+          seen.add(e.id);
+          return true;
+        });
       }
       function openDay(date) { setSelected(date); setModal("detail"); }
       function openAdd(date) {
         setSelected(date);
-        setForm({ title:"", time:"", member:"olemartin", category:"familie", note:"", reminderMinutes:30 });
+        setForm({ title:"", time:"", timeEnd:"", dateEnd:dateKey(date), member:"olemartin", category:"familie", note:"", reminderMinutes:30 });
         setEditId(null); setModal("add");
       }
       function openEdit(ev, date) {
         setSelected(date);
-        setForm({ title:ev.title, time:ev.time||"", member:ev.member, category:ev.category, note:ev.note||"", reminderMinutes:ev.reminderMinutes??30 });
+        setForm({ title:ev.title, time:ev.time||"", timeEnd:ev.timeEnd||"", dateEnd:ev.dateEnd||"", member:ev.member, category:ev.category, note:ev.note||"", reminderMinutes:ev.reminderMinutes??30 });
         setEditId(ev.id); setModal("add");
       }
       function saveEvent() {
         if (!form.title.trim()||!selected) return;
-        const key = dateKey(selected);
-        const existing = events[key]||[];
-        const entry = { ...form, reminderMinutes: Number(form.reminderMinutes) };
-        let updated;
-        if (editId) updated = existing.map(e=>e.id===editId?{...e,...entry}:e);
-        else        updated = [...existing, { ...entry, id:Date.now().toString() }];
-        isLocalUpdate.current=true;
-        setEvents(ev=>({...ev,[key]:updated}));
+        const startKey = dateKey(selected);
+        const endKey   = form.dateEnd && form.dateEnd >= startKey ? form.dateEnd : startKey;
+        const eventId  = editId || Date.now().toString();
+        const entry    = { ...form, reminderMinutes: Number(form.reminderMinutes), dateStart: startKey, dateEnd: endKey, id: eventId };
+
+        // Build list of all days this event spans
+        const spanDays = [];
+        let cur = new Date(selected);
+        const endDate = new Date(endKey + "T00:00:00");
+        while (cur <= endDate) {
+          spanDays.push(dateKey(cur));
+          cur.setDate(cur.getDate() + 1);
+        }
+
+        isLocalUpdate.current = true;
+        setEvents(ev => {
+          const next = { ...ev };
+
+          // If editing: first remove old copies from all days
+          if (editId) {
+            Object.keys(next).forEach(k => {
+              next[k] = (next[k]||[]).filter(e => e.id !== editId);
+            });
+          }
+
+          // Write event to each day in span
+          spanDays.forEach(k => {
+            const existing = next[k] || [];
+            next[k] = [...existing, entry];
+          });
+
+          return next;
+        });
         setModal("detail");
       }
       function deleteEvent(date,id) {
-        const key=dateKey(date);
         isLocalUpdate.current=true;
-        setEvents(ev=>({...ev,[key]:(ev[key]||[]).filter(e=>e.id!==id)}));
+        setEvents(ev => {
+          const next = { ...ev };
+          // Remove from all days (handles multi-day events)
+          Object.keys(next).forEach(k => {
+            next[k] = (next[k]||[]).filter(e => e.id !== id);
+          });
+          return next;
+        });
       }
       function toggleMember(id) {
         setActiveMembers(am=>am.includes(id)?(am.length>1?am.filter(x=>x!==id):am):[...am,id]);
@@ -372,8 +410,9 @@
                               <div style={{ flex:1,minWidth:0 }}>
                                 <div style={{ fontWeight:600,fontSize:14,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>{ev.title}</div>
                                 <div style={{ fontSize:11,color:"#999",marginTop:1 }}>
-                                  {ev.time&&<span style={{ fontWeight:600,color:"#666" }}>{ev.time} · </span>}
+                                  {ev.time&&<span style={{ fontWeight:600,color:"#666" }}>{ev.time}{ev.timeEnd?` – ${ev.timeEnd}`:""} · </span>}
                                   {member.emoji} {member.name}
+                                  {ev.dateEnd&&ev.dateEnd!==ev.dateStart&&<span style={{ marginLeft:4,opacity:.5 }}>· 📅</span>}
                                   {ev.reminderMinutes>0&&ev.time&&<span style={{ marginLeft:4,opacity:.5 }}>· 🔔{ev.reminderMinutes<60?`${ev.reminderMinutes}m`:`${ev.reminderMinutes/60}t`}</span>}
                                 </div>
                               </div>
@@ -458,8 +497,9 @@
                               <div style={{ flex:1,minWidth:0 }}>
                                 <div style={{ fontWeight:700,fontSize:15 }}>{ev.title}</div>
                                 <div style={{ fontSize:11,color:"#999",marginTop:2 }}>
-                                  {ev.time&&<span style={{ fontWeight:600,color:"#555" }}>{ev.time} · </span>}
+                                  {ev.time&&<span style={{ fontWeight:600,color:"#555" }}>{ev.time}{ev.timeEnd?` – ${ev.timeEnd}`:""} · </span>}
                                   {member.emoji} {member.name} · {cat.label}
+                                  {ev.dateEnd&&ev.dateEnd!==ev.dateStart&&<span style={{ marginLeft:4,background:"#f0ede8",borderRadius:4,padding:"1px 5px",fontSize:10,color:"#888" }}>Flerdagers</span>}
                                 </div>
                                 {ev.time&&<div style={{ fontSize:11,color:"#bbb",marginTop:2 }}>🔔 {rLabel}</div>}
                                 {ev.note&&<div style={{ fontSize:12,color:"#666",marginTop:4,fontStyle:"italic" }}>{ev.note}</div>}
@@ -481,17 +521,36 @@
           {modal==="add"&&selected&&(
             <div style={{ position:"fixed",inset:0,zIndex:40,display:"flex",flexDirection:"column",justifyContent:"flex-end" }} onClick={()=>setModal("detail")}>
               <div style={{ background:"rgba(0,0,0,0.5)",position:"absolute",inset:0 }} />
-              <div className="slide-up" onClick={e=>e.stopPropagation()} style={{ background:"white",borderRadius:"20px 20px 0 0",padding:"22px 16px 44px",position:"relative" }}>
+              <div className="slide-up" onClick={e=>e.stopPropagation()} style={{ background:"white",borderRadius:"20px 20px 0 0",padding:"22px 16px 44px",position:"relative",maxHeight:"90vh",overflowY:"auto" }}>
                 <div style={{ fontFamily:"'Fraunces',serif",fontSize:17,fontWeight:700,marginBottom:14 }}>
                   {editId?"Rediger hendelse":`${selected.getDate()}. ${MONTHS_NO[selected.getMonth()]}`}
                 </div>
                 <input value={form.title} onChange={e=>setForm(f=>({...f,title:e.target.value}))}
                   placeholder="Hva skjer? *" autoFocus style={{ width:"100%",padding:"12px 13px",borderRadius:10,border:"1.5px solid #eee",fontSize:15,fontWeight:500,background:"#fafafa",outline:"none",marginBottom:10 }} />
-                <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10 }}>
-                  <input type="time" value={form.time} onChange={e=>setForm(f=>({...f,time:e.target.value}))}
-                    style={{ padding:"10px 11px",borderRadius:10,border:"1.5px solid #eee",fontSize:14,background:"#fafafa",outline:"none" }} />
+                {/* Tidspunkt-rad */}
+                <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8 }}>
+                  <div>
+                    <div style={{ fontSize:10,fontWeight:600,color:"#bbb",marginBottom:4,textTransform:"uppercase",letterSpacing:.8 }}>Fra</div>
+                    <input type="time" value={form.time} onChange={e=>setForm(f=>({...f,time:e.target.value}))}
+                      style={{ width:"100%",padding:"10px 11px",borderRadius:10,border:"1.5px solid #eee",fontSize:14,background:"#fafafa",outline:"none" }} />
+                  </div>
+                  <div>
+                    <div style={{ fontSize:10,fontWeight:600,color:"#bbb",marginBottom:4,textTransform:"uppercase",letterSpacing:.8 }}>Til (tid)</div>
+                    <input type="time" value={form.timeEnd} onChange={e=>setForm(f=>({...f,timeEnd:e.target.value}))}
+                      style={{ width:"100%",padding:"10px 11px",borderRadius:10,border:"1.5px solid #eee",fontSize:14,background:"#fafafa",outline:"none" }} />
+                  </div>
+                </div>
+                {/* Sluttdato (for flerdagshendelser) */}
+                <div style={{ marginBottom:10 }}>
+                  <div style={{ fontSize:10,fontWeight:600,color:"#bbb",marginBottom:4,textTransform:"uppercase",letterSpacing:.8 }}>Sluttdato (la stå for én dag)</div>
+                  <input type="date" value={form.dateEnd} min={dateKey(selected)}
+                    onChange={e=>setForm(f=>({...f,dateEnd:e.target.value}))}
+                    style={{ width:"100%",padding:"10px 11px",borderRadius:10,border:"1.5px solid #eee",fontSize:14,background:"#fafafa",outline:"none" }} />
+                </div>
+                {/* Person */}
+                <div style={{ marginBottom:10 }}>
                   <select value={form.member} onChange={e=>setForm(f=>({...f,member:e.target.value}))}
-                    style={{ padding:"10px 11px",borderRadius:10,border:"1.5px solid #eee",fontSize:13,background:"#fafafa",outline:"none" }}>
+                    style={{ width:"100%",padding:"10px 11px",borderRadius:10,border:"1.5px solid #eee",fontSize:13,background:"#fafafa",outline:"none" }}>
                     {FAMILY_MEMBERS.map(m=><option key={m.id} value={m.id}>{m.emoji} {m.name}</option>)}
                   </select>
                 </div>
