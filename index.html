@@ -52,6 +52,7 @@
       { id: "annette",   name: "Annette",   color: "#e07b5a", emoji: "👩" },
       { id: "aria",      name: "Aria",      color: "#c45ab3", emoji: "👧" },
       { id: "falk",      name: "Falk",      color: "#5ac47d", emoji: "🧒" },
+      { id: "felles",    name: "Felles",    color: "#f5a623", emoji: "👨‍👩‍👧‍👦" },
     ];
     const CATEGORIES = [
       { id: "skole",   label: "Skole/jobb", icon: "📚" },
@@ -408,11 +409,12 @@
                     <div key={`d${day}`} onClick={()=>openDay(date)} className="tap" style={{
                       background:isToday?"#fff8f5":"#f5f2ee",minHeight:64,padding:"5px 3px",cursor:"pointer",
                       opacity:isPast&&!dayEvs.length?0.45:1,
+                      overflow:"hidden",minWidth:0,width:"100%",
                     }}>
                       <div style={{ width:20,height:20,borderRadius:"50%",background:isToday?"#e07b5a":"transparent",color:isToday?"white":isPast?"#bbb":"#1a1a1a",fontSize:10,fontWeight:isToday?700:500,display:"flex",alignItems:"center",justifyContent:"center",marginBottom:2 }}>{day}</div>
                       {dayEvs.slice(0,3).map(ev=>{
                         const member=getMember(ev.member);
-                        return <div key={ev.id} style={{ background:member.color+"25",borderLeft:`2px solid ${member.color}`,borderRadius:"0 2px 2px 0",padding:"1px 2px",fontSize:8,fontWeight:600,color:"#1a1a1a",overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",lineHeight:1.5,marginBottom:1 }}>
+                        return <div key={ev.id} style={{ background:member.color+"25",borderLeft:`2px solid ${member.color}`,borderRadius:"0 2px 2px 0",padding:"1px 2px",fontSize:8,fontWeight:600,color:"#1a1a1a",overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",lineHeight:1.5,marginBottom:1,maxWidth:"100%",boxSizing:"border-box" }}>
                           {ev.time&&<span style={{ opacity:.5 }}>{ev.time} </span>}{ev.title}
                         </div>;
                       })}
