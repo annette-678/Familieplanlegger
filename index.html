@@ -171,7 +171,7 @@
       if (!messaging || !("Notification" in window)) return;
       let swReg;
       try {
-        swReg = await navigator.serviceWorker.register("/firebase-messaging-sw.js");
+        swReg = await navigator.serviceWorker.register("/Familieplanlegger/firebase-messaging-sw.js", { scope: "/Familieplanlegger/" });
       } catch(e) { console.warn("SW register failed:", e); return; }
       const permission = Notification.permission;
       if (permission === "denied") { setNotifStatus("denied"); return; }
@@ -331,7 +331,7 @@
             <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10 }}>
               <div style={{ fontFamily:"'Fraunces',serif", fontSize:19, fontWeight:700 }}>Familiekalender</div>
               <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-                {fbStatus==="online" && notifStatus!=="granted" && (
+                {fbStatus==="online" && notifStatus!=="granted" && notifStatus!=="denied" && (
                   <button onClick={() => requestNotificationPermission(user, setNotifStatus)}
                     title="Aktiver push-varsler"
                     style={{ fontSize:18, lineHeight:1, padding:"2px 6px", borderRadius:8, background:"rgba(255,255,255,0.1)", border:"1px solid rgba(255,255,255,0.15)" }}>
