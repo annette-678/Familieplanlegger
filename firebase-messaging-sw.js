@@ -1,3 +1,7 @@
+// Service Worker for Familieplanlegger
+// Denne filen MÅ ligge i roten av repoet (ikke i undermappe)
+// slik at scope dekker hele /Familieplanlegger/-stien
+
 /**
  * firebase-messaging-sw.js
  * Må ligge i PUBLIC-mappen (roten av nettstedet ditt).
