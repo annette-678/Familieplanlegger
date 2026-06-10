@@ -112,8 +112,7 @@
         if (!window.firebase.apps.length) window.firebase.initializeApp(FIREBASE_CONFIG);
         db   = window.firebase.firestore();
         auth = window.firebase.auth();
-        // Initialiser messaging separat — ikke la det kræsje hele appen
-        try { messaging = window.firebase.messaging(); } catch(me) { console.warn("Messaging ikke tilgjengelig:", me); }
+        // Messaging initialiseres separat i registerPushToken ved behov
         firestoreReady = true;
         // Behold innlogging ved app-restart fra hjemskjerm (iOS PWA)
         try { await auth.setPersistence(window.firebase.auth.Auth.Persistence.LOCAL); } catch(pe) { console.warn("Persistence:", pe); }
@@ -168,22 +167,42 @@
     }
 
     async function registerPushToken(user, setNotifStatus) {
-      if (!messaging || !("Notification" in window)) return;
-      let swReg;
-      try {
-        swReg = await navigator.serviceWorker.register("/Familieplanlegger/firebase-messaging-sw.js", { scope: "/Familieplanlegger/" });
-      } catch(e) { console.warn("SW register failed:", e); return; }
+      if (!("Notification" in window) || !("serviceWorker" in navigator)) return;
       const permission = Notification.permission;
       if (permission === "denied") { setNotifStatus("denied"); return; }
       if (permission === "default") { setNotifStatus("prompt"); return; }
       try {
-        const token = await messaging.getToken({ vapidKey: VAPID_KEY, serviceWorkerRegistration: swReg });
-        if (token) { await saveToken(user.uid, token); setNotifStatus("granted"); }
-      } catch(e) { console.warn("FCM token:", e); }
+        // Register service worker
+        const swReg = await navigator.serviceWorker.register(
+          "/Familieplanlegger/firebase-messaging-sw.js",
+          { scope: "/Familieplanlegger/" }
+        );
+        await navigator.serviceWorker.ready;
+        console.log("SW klar:", swReg.scope);
+
+        // Get FCM token using modular API loaded separately
+        if (!window._fcmMessaging) {
+          await loadScript("https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging-compat.js");
+          window._fcmMessaging = window.firebase.messaging();
+        }
+        const token = await window._fcmMessaging.getToken({
+          vapidKey: VAPID_KEY,
+          serviceWorkerRegistration: swReg
+        });
+        if (token) {
+          console.log("FCM token hentet OK");
+          await saveToken(user.uid, token);
+          setNotifStatus("granted");
+        } else {
+          console.warn("Ingen FCM token returnert");
+        }
+      } catch(e) {
+        console.warn("FCM token feil:", e.message || e);
+      }
     }
 
     async function requestNotificationPermission(user, setNotifStatus) {
-      if (!messaging) return;
+      if (!("Notification" in window)) return;
       try {
         const permission = await Notification.requestPermission();
         if (permission === "granted") await registerPushToken(user, setNotifStatus);
