@@ -242,6 +242,8 @@
       const [editId, setEditId]           = useState(null);
       const [activeMembers, setActiveMembers] = useState(FAMILY_MEMBERS.map(m=>m.id));
       const [monthOffset, setMonthOffset] = useState(0);
+      const [dayCount, setDayCount]       = useState(14);
+      const scrollSentinelRef             = useRef(null);
       const [user, setUser]               = useState(null);
       const [fbStatus, setFbStatus]       = useState("init");
       const [notifStatus, setNotifStatus] = useState("unknown");
@@ -258,6 +260,20 @@
       useEffect(() => {
         if (fbStatus==="online") persistEvents(events);
       }, [events, fbStatus]);
+
+      // Uendelig scroll: last flere dager når brukeren nærmer seg bunnen
+      useEffect(() => {
+        if (view !== "7days") return;
+        const el = scrollSentinelRef.current;
+        if (!el) return;
+        const observer = new IntersectionObserver(entries => {
+          if (entries[0].isIntersecting) {
+            setDayCount(c => c + 14);
+          }
+        }, { rootMargin: "400px" });
+        observer.observe(el);
+        return () => observer.disconnect();
+      }, [view, dayCount]);
 
       const monthYear = {
         year:  today.getFullYear() + Math.floor((today.getMonth()+monthOffset)/12),
@@ -338,7 +354,7 @@
       }
       const getMember   = id => FAMILY_MEMBERS.find(m=>m.id===id)||FAMILY_MEMBERS[0];
       const getCategory = id => CATEGORIES.find(c=>c.id===id)||CATEGORIES[4];
-      const sevenDays   = Array.from({length:7},(_,i)=>addDays(today,i));
+      const sevenDays   = Array.from({length:dayCount},(_,i)=>addDays(today,i));
       const monthDays   = getMonthDays(monthYear.year,monthYear.month);
       const statusColor = { demo:"#f5a623",connecting:"#aaa",online:"#5ac47d",loggedout:"#ccc",error:"#e05a5a",init:"#ccc" }[fbStatus];
       const statusLabel = { demo:"Demo",connecting:"Kobler til…",online:"Synkronisert",loggedout:"Ikke innlogget",error:"Feil",init:"…" }[fbStatus];
@@ -399,8 +415,15 @@
                 const dayEvs = getEventsForDate(date).sort((a,b)=>(a.time||"99:99").localeCompare(b.time||"99:99"));
                 const isToday = isSameDay(date,today);
                 const dow = (date.getDay()+6)%7;
+                const showMonthDivider = idx===0 || date.getMonth() !== sevenDays[idx-1].getMonth();
                 return (
-                  <div key={dateKey(date)} style={{ marginBottom:8 }}>
+                  <div key={dateKey(date)}>
+                    {showMonthDivider && (
+                      <div style={{ fontFamily:"'Fraunces',serif", fontSize:15, fontWeight:700, color:"#bbb", margin: idx===0 ? "0 0 10px 2px" : "20px 0 10px 2px" }}>
+                        {MONTHS_NO[date.getMonth()]} {date.getFullYear()}
+                      </div>
+                    )}
+                  <div style={{ marginBottom:8 }}>
                     <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:4 }}>
                       <div style={{
                         width:32, height:32, borderRadius:"50%", flexShrink:0,
@@ -440,8 +463,11 @@
                           );
                         })}
                   </div>
+                  </div>
                 );
               })}
+              {/* Sentinel for uendelig scroll */}
+              <div ref={scrollSentinelRef} style={{ height:1 }} />
               <div style={{ height:100 }} />
             </div>
           )}
