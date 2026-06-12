@@ -78,12 +78,22 @@
     }
     function addDays(d, n) { const r = new Date(d); r.setDate(r.getDate()+n); return r; }
     function isSameDay(a,b) { return a.getFullYear()===b.getFullYear()&&a.getMonth()===b.getMonth()&&a.getDate()===b.getDate(); }
+    function getWeekNumber(date) {
+      // ISO 8601 ukenummer
+      const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+      const dayNum = (d.getUTCDay() + 6) % 7; // Monday=0
+      d.setUTCDate(d.getUTCDate() - dayNum + 3);
+      const firstThursday = new Date(Date.UTC(d.getUTCFullYear(), 0, 4));
+      const diff = (d - firstThursday) / 86400000;
+      return 1 + Math.round(diff / 7);
+    }
     function getMonthDays(year, month) {
       const first = (new Date(year,month,1).getDay()+6)%7;
       const total = new Date(year,month+1,0).getDate();
       const days = [];
       for(let i=0;i<first;i++) days.push(null);
       for(let d=1;d<=total;d++) days.push(d);
+      while(days.length % 7 !== 0) days.push(null);
       return days;
     }
 
@@ -436,6 +446,11 @@
                       <div style={{ fontSize:11, color:"#999", fontWeight:500 }}>
                         {isToday?"I dag":idx===1?"I morgen":MONTHS_SHORT[date.getMonth()]}
                       </div>
+                      {dow===0 && (
+                        <div style={{ fontSize:10, color:"#ccc", fontWeight:600, background:"rgba(0,0,0,0.04)", borderRadius:8, padding:"2px 8px" }}>
+                          Uke {getWeekNumber(date)}
+                        </div>
+                      )}
                       <div style={{ flex:1 }} />
                       <button onClick={()=>openAdd(date)} className="tap" style={{ width:24,height:24,borderRadius:"50%",background:"rgba(0,0,0,0.06)",fontSize:16,color:"#888",display:"flex",alignItems:"center",justifyContent:"center" }}>+</button>
                     </div>
@@ -480,34 +495,43 @@
                 <div style={{ fontFamily:"'Fraunces',serif",fontSize:18,fontWeight:700 }}>{MONTHS_NO[monthYear.month]} {monthYear.year}</div>
                 <button onClick={()=>setMonthOffset(o=>o+1)} style={{ width:32,height:32,borderRadius:"50%",background:"rgba(0,0,0,0.06)",fontSize:16,display:"flex",alignItems:"center",justifyContent:"center" }}>›</button>
               </div>
-              <div style={{ display:"grid",gridTemplateColumns:"repeat(7,1fr)",padding:"0 2px" }}>
+              <div style={{ display:"grid",gridTemplateColumns:"20px repeat(7,1fr)",padding:"0 2px" }}>
+                <div></div>
                 {DAYS_NO.map(d=><div key={d} style={{ textAlign:"center",fontSize:9,fontWeight:700,letterSpacing:1,textTransform:"uppercase",color:"#bbb",paddingBottom:6 }}>{d}</div>)}
               </div>
-              <div style={{ display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:1,background:"#e8e4df",borderTop:"1px solid #e8e4df" }}>
-                {monthDays.map((day,i)=>{
-                  if(!day) return <div key={`e${i}`} style={{ background:"#f5f2ee",minHeight:64 }} />;
-                  const date=new Date(monthYear.year,monthYear.month,day);
-                  const isToday=isSameDay(date,today);
-                  const dayEvs=getEventsForDate(date);
-                  const isPast=date<today;
-                  return (
-                    <div key={`d${day}`} onClick={()=>openDay(date)} className="tap" style={{
-                      background:isToday?"#fff8f5":"#f5f2ee",minHeight:64,padding:"5px 3px",cursor:"pointer",
-                      opacity:isPast&&!dayEvs.length?0.45:1,
-                      overflow:"hidden",minWidth:0,width:"100%",
-                    }}>
-                      <div style={{ width:20,height:20,borderRadius:"50%",background:isToday?"#e07b5a":"transparent",color:isToday?"white":isPast?"#bbb":"#1a1a1a",fontSize:10,fontWeight:isToday?700:500,display:"flex",alignItems:"center",justifyContent:"center",marginBottom:2 }}>{day}</div>
-                      {dayEvs.slice(0,3).map(ev=>{
-                        const member=getMember(ev.member);
-                        return <div key={ev.id} style={{ background:member.color+"25",borderLeft:`2px solid ${member.color}`,borderRadius:"0 2px 2px 0",padding:"1px 2px",fontSize:8,fontWeight:600,color:"#1a1a1a",overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",lineHeight:1.5,marginBottom:1,maxWidth:"100%",boxSizing:"border-box" }}>
-                          {ev.time&&<span style={{ opacity:.5 }}>{ev.time} </span>}{ev.title}
-                        </div>;
-                      })}
-                      {dayEvs.length>3&&<div style={{ fontSize:8,color:"#aaa",paddingLeft:3 }}>+{dayEvs.length-3}</div>}
-                    </div>
-                  );
-                })}
-              </div>
+              {Array.from({length: monthDays.length/7}, (_, rowIdx) => {
+                const rowDays = monthDays.slice(rowIdx*7, rowIdx*7+7);
+                const firstRealDay = rowDays.find(d => d !== null);
+                const weekNum = firstRealDay ? getWeekNumber(new Date(monthYear.year, monthYear.month, firstRealDay)) : "";
+                return (
+                  <div key={rowIdx} style={{ display:"grid",gridTemplateColumns:"20px repeat(7,1fr)",gap:1,background:"#e8e4df",borderTop: rowIdx===0 ? "1px solid #e8e4df" : "none" }}>
+                    <div style={{ display:"flex",alignItems:"center",justifyContent:"center",fontSize:8,color:"#ccc",fontWeight:700,background:"#f5f2ee" }}>{weekNum}</div>
+                    {rowDays.map((day,i)=>{
+                      if(!day) return <div key={`e${rowIdx}-${i}`} style={{ background:"#f5f2ee",minHeight:64 }} />;
+                      const date=new Date(monthYear.year,monthYear.month,day);
+                      const isToday=isSameDay(date,today);
+                      const dayEvs=getEventsForDate(date);
+                      const isPast=date<today;
+                      return (
+                        <div key={`d${day}`} onClick={()=>openDay(date)} className="tap" style={{
+                          background:isToday?"#fff8f5":"#f5f2ee",minHeight:64,padding:"5px 3px",cursor:"pointer",
+                          opacity:isPast&&!dayEvs.length?0.45:1,
+                          overflow:"hidden",minWidth:0,width:"100%",
+                        }}>
+                          <div style={{ width:20,height:20,borderRadius:"50%",background:isToday?"#e07b5a":"transparent",color:isToday?"white":isPast?"#bbb":"#1a1a1a",fontSize:10,fontWeight:isToday?700:500,display:"flex",alignItems:"center",justifyContent:"center",marginBottom:2 }}>{day}</div>
+                          {dayEvs.slice(0,3).map(ev=>{
+                            const member=getMember(ev.member);
+                            return <div key={ev.id} style={{ background:member.color+"25",borderLeft:`2px solid ${member.color}`,borderRadius:"0 2px 2px 0",padding:"1px 2px",fontSize:8,fontWeight:600,color:"#1a1a1a",overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",lineHeight:1.5,marginBottom:1,maxWidth:"100%",boxSizing:"border-box" }}>
+                              {ev.time&&<span style={{ opacity:.5 }}>{ev.time} </span>}{ev.title}
+                            </div>;
+                          })}
+                          {dayEvs.length>3&&<div style={{ fontSize:8,color:"#aaa",paddingLeft:3 }}>+{dayEvs.length-3}</div>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })}
               <div style={{ height:100 }} />
             </div>
           )}
@@ -573,21 +597,40 @@
                 </div>
                 <input value={form.title} onChange={e=>setForm(f=>({...f,title:e.target.value}))}
                   placeholder="Hva skjer? *" autoFocus style={{ width:"100%",padding:"12px 13px",borderRadius:10,border:"1.5px solid #eee",fontSize:15,fontWeight:500,background:"#fafafa",outline:"none",marginBottom:10 }} />
-                {/* Tidspunkt-rad */}
-                <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8 }}>
-                  <div>
-                    <div style={{ fontSize:10,fontWeight:600,color:"#bbb",marginBottom:4,textTransform:"uppercase",letterSpacing:.8 }}>Fra</div>
-                    <input type="time" value={form.time} onChange={e=>setForm(f=>({...f,time:e.target.value}))}
-                      step="60" pattern="[0-9]{2}:[0-9]{2}"
-                      style={{ width:"100%",padding:"10px 11px",borderRadius:10,border:"1.5px solid #eee",fontSize:14,background:"#fafafa",outline:"none" }} />
-                  </div>
-                  <div>
-                    <div style={{ fontSize:10,fontWeight:600,color:"#bbb",marginBottom:4,textTransform:"uppercase",letterSpacing:.8 }}>Til (tid)</div>
-                    <input type="time" value={form.timeEnd} onChange={e=>setForm(f=>({...f,timeEnd:e.target.value}))}
-                      step="60" pattern="[0-9]{2}:[0-9]{2}"
-                      style={{ width:"100%",padding:"10px 11px",borderRadius:10,border:"1.5px solid #eee",fontSize:14,background:"#fafafa",outline:"none" }} />
-                  </div>
+                {/* Heldagshendelse-toggle */}
+                <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10, padding:"10px 12px", background:"#fafafa", borderRadius:10, border:"1.5px solid #eee" }}>
+                  <div style={{ fontSize:13, fontWeight:600, color:"#555" }}>📅 Hele dagen (uten klokkeslett)</div>
+                  <button onClick={() => setForm(f => (f.time || f.timeEnd) ? {...f, time:"", timeEnd:""} : {...f, time:"09:00"})}
+                    style={{
+                      width:44, height:26, borderRadius:13,
+                      background: (!form.time && !form.timeEnd) ? "#e07b5a" : "#ddd",
+                      position:"relative", transition:"background .15s",
+                    }}>
+                    <div style={{
+                      width:20, height:20, borderRadius:"50%", background:"white",
+                      position:"absolute", top:3, left: (!form.time && !form.timeEnd) ? 21 : 3,
+                      transition:"left .15s", boxShadow:"0 1px 3px rgba(0,0,0,0.2)",
+                    }} />
+                  </button>
                 </div>
+
+                {/* Tidspunkt-rad — vises når heldagstoggle er av */}
+                {!(!form.time && !form.timeEnd) && (
+                  <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8 }}>
+                    <div>
+                      <div style={{ fontSize:10,fontWeight:600,color:"#bbb",marginBottom:4,textTransform:"uppercase",letterSpacing:.8 }}>Fra</div>
+                      <input type="time" value={form.time} onChange={e=>setForm(f=>({...f,time:e.target.value}))}
+                        step="60" pattern="[0-9]{2}:[0-9]{2}"
+                        style={{ width:"100%",padding:"10px 11px",borderRadius:10,border:"1.5px solid #eee",fontSize:14,background:"#fafafa",outline:"none" }} />
+                    </div>
+                    <div>
+                      <div style={{ fontSize:10,fontWeight:600,color:"#bbb",marginBottom:4,textTransform:"uppercase",letterSpacing:.8 }}>Til (tid)</div>
+                      <input type="time" value={form.timeEnd} onChange={e=>setForm(f=>({...f,timeEnd:e.target.value}))}
+                        step="60" pattern="[0-9]{2}:[0-9]{2}"
+                        style={{ width:"100%",padding:"10px 11px",borderRadius:10,border:"1.5px solid #eee",fontSize:14,background:"#fafafa",outline:"none" }} />
+                    </div>
+                  </div>
+                )}
                 {/* Sluttdato (for flerdagshendelser) */}
                 <div style={{ marginBottom:10 }}>
                   <div style={{ fontSize:10,fontWeight:600,color:"#bbb",marginBottom:4,textTransform:"uppercase",letterSpacing:.8 }}>Sluttdato (la stå for én dag)</div>
