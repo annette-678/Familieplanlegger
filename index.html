@@ -114,10 +114,10 @@
       try {
         setFbStatus("connecting");
         await Promise.all([
-          loadScript("https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"),
-          loadScript("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"),
-          loadScript("https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"),
-          loadScript("https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging-compat.js"),
+          loadScript("https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"),
+          loadScript("https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"),
+          loadScript("https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"),
+          loadScript("https://www.gstatic.com/firebasejs/9.23.0/firebase-messaging-compat.js"),
         ]);
         if (!window.firebase.apps.length) window.firebase.initializeApp(FIREBASE_CONFIG);
         db   = window.firebase.firestore();
@@ -192,7 +192,7 @@
 
         // Get FCM token using modular API loaded separately
         if (!window._fcmMessaging) {
-          await loadScript("https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging-compat.js");
+          await loadScript("https://www.gstatic.com/firebasejs/9.23.0/firebase-messaging-compat.js");
           window._fcmMessaging = window.firebase.messaging();
         }
         const token = await window._fcmMessaging.getToken({
