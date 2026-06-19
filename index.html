@@ -248,7 +248,7 @@
       const [events, setEvents]           = useState({});
       const [selected, setSelected]       = useState(null);
       const [modal, setModal]             = useState(null);
-      const [form, setForm]               = useState({ title:"", time:"", timeEnd:"", dateEnd:"", member:"olemartin", category:"familie", note:"", reminderMinutes:30 });
+      const [form, setForm]               = useState({ title:"", time:"", timeEnd:"", dateEnd:"", members:["olemartin"], category:"familie", note:"", reminderMinutes:30 });
       const [editId, setEditId]           = useState(null);
       const [activeMembers, setActiveMembers] = useState(FAMILY_MEMBERS.map(m=>m.id));
       const [monthOffset, setMonthOffset] = useState(0);
@@ -294,7 +294,9 @@
         const key = dateKey(date);
         const seen = new Set();
         return (events[key]||[]).filter(e => {
-          if (!activeMembers.includes(e.member)) return false;
+          const evMembers = (e.members && e.members.length) ? e.members : [e.member];
+          const matches = evMembers.some(m => activeMembers.includes(m));
+          if (!matches) return false;
           if (seen.has(e.id)) return false;
           seen.add(e.id);
           return true;
@@ -303,12 +305,12 @@
       function openDay(date) { setSelected(date); setModal("detail"); }
       function openAdd(date) {
         setSelected(date);
-        setForm({ title:"", time:"", timeEnd:"", dateEnd:dateKey(date), member:"olemartin", category:"familie", note:"", reminderMinutes:30 });
+        setForm({ title:"", time:"", timeEnd:"", dateEnd:dateKey(date), members:["olemartin"], category:"familie", note:"", reminderMinutes:30 });
         setEditId(null); setModal("add");
       }
       function openEdit(ev, date) {
         setSelected(date);
-        setForm({ title:ev.title, time:ev.time||"", timeEnd:ev.timeEnd||"", dateEnd:ev.dateEnd||"", member:ev.member, category:ev.category, note:ev.note||"", reminderMinutes:ev.reminderMinutes??30 });
+        setForm({ title:ev.title, time:ev.time||"", timeEnd:ev.timeEnd||"", dateEnd:ev.dateEnd||"", members:(ev.members&&ev.members.length)?ev.members:[ev.member], category:ev.category, note:ev.note||"", reminderMinutes:ev.reminderMinutes??30 });
         setEditId(ev.id); setModal("add");
       }
       function saveEvent() {
@@ -362,8 +364,17 @@
       function toggleMember(id) {
         setActiveMembers(am=>am.includes(id)?(am.length>1?am.filter(x=>x!==id):am):[...am,id]);
       }
+      function toggleFormMember(id) {
+        setForm(f => {
+          const has = f.members.includes(id);
+          const updated = has ? f.members.filter(x=>x!==id) : [...f.members, id];
+          return { ...f, members: updated.length ? updated : f.members }; // alltid minst én valgt
+        });
+      }
       const getMember   = id => FAMILY_MEMBERS.find(m=>m.id===id)||FAMILY_MEMBERS[0];
       const getCategory = id => CATEGORIES.find(c=>c.id===id)||CATEGORIES[4];
+      // Bakoverkompatibel: håndterer både gamle hendelser (ev.member: string) og nye (ev.members: array)
+      const getMembers  = ev => (ev.members && ev.members.length ? ev.members : [ev.member]).filter(Boolean).map(getMember);
       const sevenDays   = Array.from({length:dayCount},(_,i)=>addDays(today,i));
       const monthDays   = getMonthDays(monthYear.year,monthYear.month);
       const statusColor = { demo:"#f5a623",connecting:"#aaa",online:"#5ac47d",loggedout:"#ccc",error:"#e05a5a",init:"#ccc" }[fbStatus];
@@ -457,19 +468,19 @@
                     {dayEvs.length===0
                       ? <div onClick={()=>openAdd(date)} style={{ background:"white",borderRadius:10,padding:"10px 14px",fontSize:12,color:"#ccc",fontStyle:"italic",cursor:"pointer",border:"1px dashed #eee" }}>Ingen hendelser</div>
                       : dayEvs.map(ev=>{
-                          const member=getMember(ev.member); const cat=getCategory(ev.category);
+                          const members=getMembers(ev); const cat=getCategory(ev.category);
                           return (
                             <div key={ev.id} onClick={()=>openDay(date)} className="tap" style={{
                               background:"white",borderRadius:10,padding:"10px 14px",marginBottom:4,
                               display:"flex",alignItems:"center",gap:10,cursor:"pointer",
-                              boxShadow:"0 1px 3px rgba(0,0,0,0.05)",borderLeft:`4px solid ${member.color}`,
+                              boxShadow:"0 1px 3px rgba(0,0,0,0.05)",borderLeft:`4px solid ${members[0].color}`,
                             }}>
                               <div style={{ fontSize:18 }}>{cat.icon}</div>
                               <div style={{ flex:1,minWidth:0 }}>
                                 <div style={{ fontWeight:600,fontSize:14,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>{ev.title}</div>
                                 <div style={{ fontSize:11,color:"#999",marginTop:1 }}>
                                   {ev.time&&<span style={{ fontWeight:600,color:"#666" }}>{ev.time}{ev.timeEnd?` – ${ev.timeEnd}`:""} · </span>}
-                                  {member.emoji} {member.name}
+                                  {members.map(m=>m.emoji).join(" ")} {members.map(m=>m.name).join(", ")}
                                   {ev.dateEnd&&ev.dateEnd!==ev.dateStart&&<span style={{ marginLeft:4,opacity:.5 }}>· 📅</span>}
                                   {ev.reminderMinutes>0&&ev.time&&<span style={{ marginLeft:4,opacity:.5 }}>· 🔔{ev.reminderMinutes<60?`${ev.reminderMinutes}m`:`${ev.reminderMinutes/60}t`}</span>}
                                 </div>
@@ -520,9 +531,10 @@
                         }}>
                           <div style={{ width:20,height:20,borderRadius:"50%",background:isToday?"#e07b5a":"transparent",color:isToday?"white":isPast?"#bbb":"#1a1a1a",fontSize:10,fontWeight:isToday?700:500,display:"flex",alignItems:"center",justifyContent:"center",marginBottom:2 }}>{day}</div>
                           {dayEvs.slice(0,3).map(ev=>{
-                            const member=getMember(ev.member);
-                            return <div key={ev.id} style={{ background:member.color+"25",borderLeft:`2px solid ${member.color}`,borderRadius:"0 2px 2px 0",padding:"1px 2px",fontSize:8,fontWeight:600,color:"#1a1a1a",overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",lineHeight:1.5,marginBottom:1,maxWidth:"100%",boxSizing:"border-box" }}>
-                              {ev.time&&<span style={{ opacity:.5 }}>{ev.time} </span>}{ev.title}
+                            const members=getMembers(ev);
+                            const c0=members[0].color;
+                            return <div key={ev.id} style={{ background:c0+"25",borderLeft:`2px solid ${c0}`,borderRadius:"0 2px 2px 0",padding:"1px 2px",fontSize:8,fontWeight:600,color:"#1a1a1a",overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",lineHeight:1.5,marginBottom:1,maxWidth:"100%",boxSizing:"border-box" }}>
+                              {ev.time&&<span style={{ opacity:.5 }}>{ev.time} </span>}{ev.title}{members.length>1?" 👥":""}
                             </div>;
                           })}
                           {dayEvs.length>3&&<div style={{ fontSize:8,color:"#aaa",paddingLeft:3 }}>+{dayEvs.length-3}</div>}
@@ -557,19 +569,24 @@
                   {dayEvs.length===0
                     ? <div style={{ color:"#bbb",textAlign:"center",padding:"28px 0",fontSize:14 }}>Ingen hendelser 🌿</div>
                     : dayEvs.map(ev=>{
-                        const member=getMember(ev.member); const cat=getCategory(ev.category);
+                        const members=getMembers(ev); const cat=getCategory(ev.category);
                         const rMin=ev.reminderMinutes??30;
                         const rLabel=rMin===0?"Ingen varsel":rMin<60?`${rMin} min før`:`${rMin/60} time${rMin>60?"r":""} før`;
                         return (
-                          <div key={ev.id} style={{ background:"white",borderRadius:12,padding:"12px",marginBottom:8,borderLeft:`4px solid ${member.color}`,boxShadow:"0 1px 4px rgba(0,0,0,0.05)" }}>
+                          <div key={ev.id} style={{ background:"white",borderRadius:12,padding:"12px",marginBottom:8,borderLeft:`4px solid ${members[0].color}`,boxShadow:"0 1px 4px rgba(0,0,0,0.05)" }}>
                             <div style={{ display:"flex",alignItems:"flex-start",gap:10 }}>
                               <div style={{ fontSize:20,marginTop:1 }}>{cat.icon}</div>
                               <div style={{ flex:1,minWidth:0 }}>
                                 <div style={{ fontWeight:700,fontSize:15 }}>{ev.title}</div>
                                 <div style={{ fontSize:11,color:"#999",marginTop:2 }}>
                                   {ev.time&&<span style={{ fontWeight:600,color:"#555" }}>{ev.time}{ev.timeEnd?` – ${ev.timeEnd}`:""} · </span>}
-                                  {member.emoji} {member.name} · {cat.label}
+                                  {cat.label}
                                   {ev.dateEnd&&ev.dateEnd!==ev.dateStart&&<span style={{ marginLeft:4,background:"#f0ede8",borderRadius:4,padding:"1px 5px",fontSize:10,color:"#888" }}>Flerdagers</span>}
+                                </div>
+                                <div style={{ display:"flex",gap:4,flexWrap:"wrap",marginTop:5 }}>
+                                  {members.map(m=>(
+                                    <span key={m.id} style={{ fontSize:10,fontWeight:600,background:m.color+"20",color:m.color,borderRadius:8,padding:"2px 7px" }}>{m.emoji} {m.name}</span>
+                                  ))}
                                 </div>
                                 {ev.time&&<div style={{ fontSize:11,color:"#bbb",marginTop:2 }}>🔔 {rLabel}</div>}
                                 {ev.note&&<div style={{ fontSize:12,color:"#666",marginTop:4,fontStyle:"italic" }}>{ev.note}</div>}
@@ -638,12 +655,23 @@
                     onChange={e=>setForm(f=>({...f,dateEnd:e.target.value}))}
                     style={{ width:"100%",padding:"10px 11px",borderRadius:10,border:"1.5px solid #eee",fontSize:14,background:"#fafafa",outline:"none" }} />
                 </div>
-                {/* Person */}
+                {/* Person(er) — flervalg */}
                 <div style={{ marginBottom:10 }}>
-                  <select value={form.member} onChange={e=>setForm(f=>({...f,member:e.target.value}))}
-                    style={{ width:"100%",padding:"10px 11px",borderRadius:10,border:"1.5px solid #eee",fontSize:13,background:"#fafafa",outline:"none" }}>
-                    {FAMILY_MEMBERS.map(m=><option key={m.id} value={m.id}>{m.emoji} {m.name}</option>)}
-                  </select>
+                  <div style={{ fontSize:10,fontWeight:600,color:"#bbb",marginBottom:5,textTransform:"uppercase",letterSpacing:.8 }}>Hvem gjelder det?</div>
+                  <div style={{ display:"flex",gap:5,flexWrap:"wrap" }}>
+                    {FAMILY_MEMBERS.map(m=>{
+                      const isSelected = form.members.includes(m.id);
+                      return (
+                        <button key={m.id} onClick={()=>toggleFormMember(m.id)} style={{
+                          padding:"6px 12px", borderRadius:14, fontSize:12, fontWeight:600,
+                          background: isSelected ? m.color : "#f0ede8",
+                          color: isSelected ? "white" : "#666",
+                          transition:"all .12s",
+                          border: isSelected ? `1.5px solid ${m.color}` : "1.5px solid transparent",
+                        }}>{m.emoji} {m.name}</button>
+                      );
+                    })}
+                  </div>
                 </div>
                 <div style={{ display:"flex",gap:5,flexWrap:"wrap",marginBottom:10 }}>
                   {CATEGORIES.map(cat=>(
